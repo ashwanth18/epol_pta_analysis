@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+  --chart-tooltip-bg: #ffffff;
+  --chart-tooltip-border: #d5d9e0;
+  --chart-tooltip-text: #0f131a;
+  --chart-tooltip-label: #525a6b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --chart-tooltip-bg: #2a303d;
+    --chart-tooltip-border: #3b4250;
+    --chart-tooltip-text: #eceef2;
+    --chart-tooltip-label: #aeb4bf;
+  }
+}
+
+html, body {
+  background: #f6f7f9;
+  color: #0f131a;
+}
+
+@media (prefers-color-scheme: dark) {
+  html, body {
+    background: #0f131a;
+    color: #eceef2;
+  }
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Recharts tooltips — force contrast; body colour must not leak in */
+.recharts-default-tooltip {
+  background-color: var(--chart-tooltip-bg) !important;
+  border-color: var(--chart-tooltip-border) !important;
+  color: var(--chart-tooltip-text) !important;
+}
+
+.recharts-default-tooltip .label,
+.recharts-default-tooltip .intro {
+  color: var(--chart-tooltip-label) !important;
+}
+
+.recharts-default-tooltip .desc,
+.recharts-default-tooltip li {
+  color: var(--chart-tooltip-text) !important;
+}
