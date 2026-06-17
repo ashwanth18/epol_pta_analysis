@@ -22,6 +22,20 @@ export function fmtPct(n: number, digits = 1): string {
   return `${n.toFixed(digits)}%`;
 }
 
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+export function monthLabel(m: string): string {
+  const [y, mm] = m.split("-");
+  const idx = parseInt(mm, 10) - 1;
+  if (idx < 0 || idx > 11 || !y) return m;
+  return `${MONTH_NAMES[idx]} ${y}`;
+}
+
+export function fmtPctOrDash(n: number | null | undefined, digits = 1): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return `${n.toFixed(digits)}%`;
+}
+
 export function ragClass(rag: "RED" | "AMBER" | "GREEN" | string): string {
   if (rag === "RED") return "bg-rag-red/15 text-rag-red border-rag-red/40";
   if (rag === "AMBER") return "bg-rag-amber/15 text-rag-amber border-rag-amber/40";

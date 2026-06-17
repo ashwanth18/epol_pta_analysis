@@ -3,13 +3,15 @@
 import { useMemo, useState } from "react";
 import { DataTable } from "@/components/DataTable";
 import { Card, CardBody, CardHeader, Pill, Stat } from "@/components/ui";
-import type { AccuracyRow, Commercial, IngredientMaster, MaterialWeigherLink, Sku, TimelineEntry, WeigherIngredientLink } from "@/lib/data";
-import { fmtNumber, fmtPct } from "@/lib/format";
+import type { AccuracyRow, Commercial, CommercialMonthly, IngredientMaster, MaterialWeigherLink, Sku, TimelineEntry, WeigherIngredientLink } from "@/lib/data";
+import { fmtNumber, fmtPct, fmtPctOrDash, monthLabel } from "@/lib/format";
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -419,6 +421,11 @@ export function CommercialClient({ data }: { data: Commercial }) {
     return chartLimit > 0 ? list.slice(0, chartLimit) : list;
   }, [data.customers, chartLimit, customerQuery]);
 
+  const momCommercial = useMemo(
+    () => data.monthly.map((m) => ({ ...m, label: monthLabel(m.month) })),
+    [data.monthly],
+  );
+
   const ChartLimitSelect = (
     <select
       value={chartLimit}
@@ -438,6 +445,48 @@ export function CommercialClient({ data }: { data: Commercial }) {
         <CardHeader right={<Pill tone="info">Ring buffers — spans differ per table</Pill>}>Data coverage timeline</CardHeader>
         <CardBody className="p-0">
           <TimelineTable rows={data.timeline} />
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader right={<Pill tone="info">{data.monthly.length} months</Pill>}>Month on month</CardHeader>
+        <CardBody>
+          <p className="text-sm text-ink-500 mb-3">
+            Production volume and batching accuracy by calendar month, bucketed on batch start date. The latest month may be partial.
+          </p>
+          <div style={{ height: 300 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={momCommercial} margin={{ left: 4, right: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(120,120,130,0.2)" />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="t" tick={{ fontSize: 11 }} unit=" t" />
+                <YAxis yAxisId="p" orientation="right" domain={[0, 100]} tick={{ fontSize: 11 }} unit="%" />
+                <Tooltip {...chartTooltipProps} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar yAxisId="t" dataKey="tonnes" name="Tonnes" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                <Line yAxisId="p" dataKey="in_tol_pct" name="In-tol %" stroke="#16a34a" strokeWidth={2} dot={{ r: 3 }} />
+                <Line yAxisId="p" dataKey="batch_perfect_pct" name="Batch-perfect %" stroke="#d97706" strokeWidth={2} dot={{ r: 3 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-4">
+            <DataTable
+              rows={data.monthly}
+              rowKey={(r) => r.month}
+              defaultSort={{ id: "month", dir: "asc" }}
+              pageSize={12}
+              columns={[
+                { id: "month", header: "Month", sortValue: (r: CommercialMonthly) => r.month, cell: (r) => <span className="font-medium">{monthLabel(r.month)}</span> },
+                { id: "batches", header: "Batches", align: "right", sortValue: (r) => r.batches, cell: (r) => r.batches.toLocaleString() },
+                { id: "tonnes", header: "Tonnes", align: "right", sortValue: (r) => r.tonnes, cell: (r) => fmtNumber(r.tonnes) },
+                { id: "mean_t_day", header: "t / day", align: "right", sortValue: (r) => r.mean_t_day, cell: (r) => fmtNumber(r.mean_t_day) },
+                { id: "in_tol", header: "In-tol %", align: "right", sortValue: (r) => r.in_tol_pct ?? -1, cell: (r) => fmtPctOrDash(r.in_tol_pct) },
+                { id: "perfect", header: "Batch-perfect %", align: "right", sortValue: (r) => r.batch_perfect_pct ?? -1, cell: (r) => fmtPctOrDash(r.batch_perfect_pct) },
+                { id: "skus", header: "SKUs", align: "right", sortValue: (r) => r.skus, cell: (r) => r.skus.toLocaleString() },
+                { id: "unassigned", header: "No customer %", align: "right", sortValue: (r) => r.unassigned_pct, cell: (r) => fmtPctOrDash(r.unassigned_pct) },
+              ]}
+            />
+          </div>
         </CardBody>
       </Card>
 

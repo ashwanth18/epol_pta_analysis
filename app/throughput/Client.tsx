@@ -4,13 +4,15 @@ import { useMemo, useState } from "react";
 import { DataTable } from "@/components/DataTable";
 import { Card, CardBody, CardHeader, Pill } from "@/components/ui";
 import { chartTooltipProps } from "@/components/ChartTooltip";
-import type { ThroughputAnalytics, ThroughputBatch, ThroughputSku } from "@/lib/data";
+import type { ThroughputAnalytics, ThroughputBatch, ThroughputMonthly, ThroughputSku } from "@/lib/data";
+import { fmtNumber, monthLabel } from "@/lib/format";
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
   ComposedChart,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -88,6 +90,10 @@ export function ThroughputClient({ data }: { data: ThroughputAnalytics }) {
   }, [data, durStats]);
 
   const dailyChart = useMemo(() => data.daily.map((d) => ({ ...d })), [data.daily]);
+  const momThroughput = useMemo(
+    () => data.monthly.map((m) => ({ ...m, label: monthLabel(m.month) })),
+    [data.monthly],
+  );
   const hourlyChart = useMemo(
     () => data.hourly.map((h) => ({ ...h, label: `${String(h.hour).padStart(2, "0")}:00` })),
     [data.hourly],
@@ -104,6 +110,45 @@ export function ThroughputClient({ data }: { data: ThroughputAnalytics }) {
 
   return (
     <div className="space-y-4">
+      <Card>
+        <CardHeader right={<Pill tone="info">{data.monthly.length} months</Pill>}>Month on month</CardHeader>
+        <CardBody>
+          <p className="text-sm text-ink-500 mb-3">
+            Throughput rate and mean cycle time by calendar month (timed batches only). The latest month may be partial.
+          </p>
+          <div style={{ height: 300 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={momThroughput} margin={{ left: 4, right: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(120,120,130,0.2)" />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="r" tick={{ fontSize: 11 }} unit=" t/h" />
+                <YAxis yAxisId="d" orientation="right" tick={{ fontSize: 11 }} unit=" min" />
+                <Tooltip {...chartTooltipProps} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Line yAxisId="r" dataKey="t_per_h" name="t/h" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
+                <Line yAxisId="d" dataKey="duration_min_mean" name="Cycle time (min)" stroke="#d97706" strokeWidth={2} dot={{ r: 3 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-4">
+            <DataTable
+              rows={data.monthly}
+              rowKey={(r) => r.month}
+              defaultSort={{ id: "month", dir: "asc" }}
+              pageSize={12}
+              columns={[
+                { id: "month", header: "Month", sortValue: (r: ThroughputMonthly) => r.month, cell: (r) => <span className="font-medium">{monthLabel(r.month)}</span> },
+                { id: "batches", header: "Timed batches", align: "right", sortValue: (r) => r.batches, cell: (r) => r.batches.toLocaleString() },
+                { id: "tonnes", header: "Tonnes", align: "right", sortValue: (r) => r.tonnes, cell: (r) => fmtNumber(r.tonnes) },
+                { id: "hours", header: "Batch-hours", align: "right", sortValue: (r) => r.hours, cell: (r) => fmtNumber(r.hours) },
+                { id: "tph", header: "t / h", align: "right", sortValue: (r) => r.t_per_h, cell: (r) => r.t_per_h.toFixed(3) },
+                { id: "cycle", header: "Cycle time", align: "right", sortValue: (r) => r.duration_min_mean, cell: (r) => `${r.duration_min_mean} min` },
+              ]}
+            />
+          </div>
+        </CardBody>
+      </Card>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
           <CardHeader right={<Pill tone="info">Output per day</Pill>}>Daily tonnes &amp; batches</CardHeader>

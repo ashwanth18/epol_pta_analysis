@@ -286,6 +286,28 @@ production = {
     "daily_series": [{"date": d.isoformat(), "tonnes": round(daily[d], 1)} for d in days],
 }
 
+# ---- Shared month buckets (YYYY-MM) for month-on-month KPIs ----
+batch_month = {}
+prod_m_t = defaultdict(float)
+prod_m_b = defaultdict(int)
+prod_m_days = defaultdict(set)
+prod_m_skus = defaultdict(set)
+prod_m_noassign = defaultdict(int)
+for s in bstarts:
+    d = parse_dt(s.get("START_TIME"))
+    if not d:
+        continue
+    m = d.strftime("%Y-%m")
+    batch_month[s.get("LOG_BATCH")] = m
+    prod_m_t[m] += batch_tonnes(s.get("LOG_BATCH"))
+    prod_m_b[m] += 1
+    prod_m_days[m].add(d.date())
+    frm = (s.get("FRM_CODE") or "").strip()
+    if frm:
+        prod_m_skus[m].add(frm)
+    if not (s.get("CUST_NAME") or "").strip():
+        prod_m_noassign[m] += 1
+
 
 # ---- weighment helpers ----
 def weigh_row(w):
@@ -337,6 +359,7 @@ whr2_acc = defaultdict(acc_new)
 whr2_meta = defaultdict(lambda: {"batches": set(), "total_kg": 0.0, "materials": Counter()})
 link_acc = defaultdict(acc_new)
 link_meta = defaultdict(lambda: {"name": "", "batches": set(), "total_kg": 0.0})
+month_acc = defaultdict(acc_new)  # weighment in-tolerance by month
 scored_total = 0
 
 for w in bw_window:
@@ -382,6 +405,9 @@ for w in bw_window:
     lk["name"] = name; lk["total_kg"] += act
     if lb is not None:
         lk["batches"].add(lb)
+    bm = batch_month.get(lb)
+    if bm:
+        acc_add(month_acc[bm], ok, absv, var)
 
 weighers = []
 for whr, a in whr_acc.items():
@@ -455,6 +481,33 @@ accuracy = {
     },
     "weigher_groups": weigher_groups, "ingredients": ingredients, "formulations": formulations,
 }
+
+# ---- Commercial month-on-month rollup (production + accuracy + customer/SKU mix) ----
+month_batch_total = defaultdict(int)
+month_batch_perfect = defaultdict(int)
+for lb, oks in by_batch.items():
+    m = batch_month.get(lb)
+    if not m:
+        continue
+    month_batch_total[m] += 1
+    if all(oks):
+        month_batch_perfect[m] += 1
+
+commercial_monthly = []
+for m in sorted(prod_m_b):
+    ma = acc_stats(month_acc.get(m, acc_new()))
+    bt = month_batch_total.get(m, 0)
+    commercial_monthly.append({
+        "month": m,
+        "batches": prod_m_b[m],
+        "tonnes": round(prod_m_t[m], 1),
+        "days": len(prod_m_days[m]),
+        "mean_t_day": round(prod_m_t[m] / max(len(prod_m_days[m]), 1), 1),
+        "in_tol_pct": ma["in_tol_pct"] if ma else None,
+        "batch_perfect_pct": round(100 * month_batch_perfect.get(m, 0) / bt, 1) if bt else None,
+        "skus": len(prod_m_skus[m]),
+        "unassigned_pct": round(100 * prod_m_noassign[m] / max(prod_m_b[m], 1), 1),
+    })
 
 # ---- macro/micro weighment analytics (replaces hand/auto) ----
 mode_totals = {}
@@ -755,6 +808,18 @@ tp_hourly = [{
     "duration_min_mean": round(mean([r["duration_min"] for r in rs]), 1),
 } for h, rs in sorted(by_hour.items())]
 
+by_month_tp = defaultdict(list)
+for r in tp_batches:
+    if r["date"]:
+        by_month_tp[r["date"][:7]].append(r)
+tp_monthly = [{
+    "month": m, "batches": len(rs),
+    "tonnes": round(sum(r["tonnes"] for r in rs), 1),
+    "hours": round(sum(r["duration_min"] for r in rs) / 60, 1),
+    "t_per_h": round(mean([r["t_per_h"] for r in rs]), 3),
+    "duration_min_mean": round(mean([r["duration_min"] for r in rs]), 1),
+} for m, rs in sorted(by_month_tp.items())]
+
 tp_routes = [{
     "route": rt, "batches": len(rs),
     "tonnes": round(sum(r["tonnes"] for r in rs), 1),
@@ -810,7 +875,7 @@ throughput = {
         "duration_min_stdev": stdev_safe(dur_all),
         "batches_per_day_mean": round(len(tp_batches) / max(len(by_date), 1), 1),
     },
-    "daily": tp_daily, "hourly": tp_hourly, "routes": tp_routes, "skus": tp_skus,
+    "daily": tp_daily, "monthly": tp_monthly, "hourly": tp_hourly, "routes": tp_routes, "skus": tp_skus,
     "ingredient_count_buckets": tp_ingn, "distribution": distribution, "batches": tp_batches,
     "notes": [
         "Cycle time = BSTARTS.START_TIME -> BEND2S.FINISHTIME (fallback BENDS.END_TIME) per LOG_BATCH.",
@@ -929,6 +994,17 @@ alm_tol = Counter()
 alm_by_batch = defaultdict(int)
 alm_states = Counter()
 alm_dts = []
+# Active-duration edge pairing: STATE on = raised, off = cleared.
+ALM_MAX_INTERVAL_SEC = 4 * 3600  # clamp runaway / missing-clear intervals
+alm_open = {}                    # (alm_no, suffix) -> (raised_dt, name)
+alm_dur_sec = defaultdict(float)  # alarm name -> total active seconds
+alm_dur_cnt = defaultdict(int)    # alarm name -> completed intervals
+alm_theme_dur = defaultdict(float)  # theme -> total active seconds
+alm_dur_intervals = 0
+alm_dur_capped = 0
+alm_m_events = Counter()                              # operational events by month
+alm_m_dur_sec = defaultdict(float)                   # active seconds by month (clear time)
+alm_m_theme_dur = defaultdict(lambda: defaultdict(float))  # month -> theme -> active seconds
 for path in _day_files("ALMLOGS.DBF"):
     try:
         rows = DBF(path, encoding="latin-1", ignore_missing_memofile=True)
@@ -952,10 +1028,45 @@ for path in _day_files("ALMLOGS.DBF"):
         if t:
             alm_hourly[t.hour] += 1
             alm_dts.append(t)
+            alm_m_events[t.strftime("%Y-%m")] += 1
+            pid = (r.get("ALM_NO"), (r.get("SUFFIX") or ""))
+            if r.get("STATE"):
+                # keep earliest raise so re-triggers don't shrink the active span
+                alm_open.setdefault(pid, (t, nm))
+            else:
+                ot = alm_open.pop(pid, None)
+                if ot and t > ot[0]:
+                    secs = (t - ot[0]).total_seconds()
+                    if secs > ALM_MAX_INTERVAL_SEC:
+                        secs = ALM_MAX_INTERVAL_SEC
+                        alm_dur_capped += 1
+                    onm = ot[1]
+                    alm_dur_sec[onm] += secs
+                    alm_dur_cnt[onm] += 1
+                    alm_theme_dur[alarm_theme(onm)] += secs
+                    alm_dur_intervals += 1
+                    cm = t.strftime("%Y-%m")
+                    alm_m_dur_sec[cm] += secs
+                    alm_m_theme_dur[cm][alarm_theme(onm)] += secs
         lb = r.get("LOG_BATCH")
         if lb:
             alm_by_batch[lb] += 1
 alm_seen = None  # free memory
+
+# ---- Alarm active-time rollups ----
+alm_dur_total_sec = sum(alm_dur_sec.values())
+top_alarms_by_duration = sorted(
+    ({"name": n,
+      "events": alm_names.get(n, 0),
+      "intervals": alm_dur_cnt[n],
+      "total_min": round(s / 60, 1),
+      "avg_min": round(s / 60 / alm_dur_cnt[n], 2) if alm_dur_cnt[n] else 0}
+     for n, s in alm_dur_sec.items()),
+    key=lambda x: -x["total_min"])[:20]
+theme_duration = sorted(
+    ({"theme": th, "total_min": round(s / 60, 1), "hours": round(s / 3600, 1)}
+     for th, s in alm_theme_dur.items()),
+    key=lambda x: -x["total_min"])
 windows_noise = alm_total - alm_op_total
 
 pdm_data = {
@@ -1000,6 +1111,8 @@ cc_tested = 0
 cc_changeover_tested = 0
 cc_by_vessel = Counter()
 cc_vessels = set()
+cc_m_changeovers = defaultdict(int)
+cc_m_tested = defaultdict(int)
 for path in _day_files("CCLOGS.DBF"):
     try:
         rows = DBF(path, encoding="latin-1", ignore_missing_memofile=True)
@@ -1018,6 +1131,12 @@ for path in _day_files("CCLOGS.DBF"):
         if (r.get("PREV_FRM") or "") != (r.get("NEXT_FRM") or ""):
             cc_changeovers_n += 1
             cc_by_vessel[vessel] += 1
+            cd = parse_dt(r.get("DATE"))
+            if cd:
+                cm = cd.strftime("%Y-%m")
+                cc_m_changeovers[cm] += 1
+                if r.get("CC_TEST"):
+                    cc_m_tested[cm] += 1
             if r.get("CC_TEST"):
                 cc_changeover_tested += 1
 cc_seen = None
@@ -1051,6 +1170,22 @@ nc_man = Counter()
 c_man = Counter()
 
 alarm_log_hours = round((max(alm_dts) - min(alm_dts)).total_seconds() / 3600, 1) if len(alm_dts) > 1 else 0
+
+# ---- Alarms month-on-month rollup (events, time lost, top theme, carryover) ----
+alarms_monthly = []
+for m in sorted(set(alm_m_events) | set(alm_m_dur_sec) | set(cc_m_changeovers)):
+    themes_m = alm_m_theme_dur.get(m, {})
+    top_theme = max(themes_m.items(), key=lambda x: x[1])[0] if themes_m else None
+    co = cc_m_changeovers.get(m, 0)
+    alarms_monthly.append({
+        "month": m,
+        "events": alm_m_events.get(m, 0),
+        "time_lost_h": round(alm_m_dur_sec.get(m, 0) / 3600, 1),
+        "top_theme": top_theme,
+        "changeovers": co,
+        "changeover_test_pct": round(100 * cc_m_tested.get(m, 0) / co, 1) if co else None,
+    })
+
 alarms_insights = {
     "coverage": {
         "alarm_log_from": min(alm_dts).strftime("%Y-%m-%d %H:%M") if alm_dts else None,
@@ -1081,6 +1216,18 @@ alarms_insights = {
     "hourly": [{"hour": h, "count": alm_hourly[h]} for h in sorted(alm_hourly)],
     "top_alarms": [{"name": n, "count": c} for n, c in alm_names.most_common(20)],
     "tolerance_alarms": [{"name": n, "count": c} for n, c in alm_tol.most_common()],
+    "duration": {
+        "total_min": round(alm_dur_total_sec / 60, 1),
+        "total_hours": round(alm_dur_total_sec / 3600, 1),
+        "intervals": alm_dur_intervals,
+        "intervals_capped": alm_dur_capped,
+        "cap_min": ALM_MAX_INTERVAL_SEC // 60,
+        "unclosed": len(alm_open),
+        "by_theme": theme_duration,
+        "top_alarms": top_alarms_by_duration,
+        "note": "Active time = sum of intervals from an alarm raising (STATE on) to clearing (STATE off), paired per alarm ID. Intervals over the cap are clamped; alarms still active at period end are excluded.",
+    },
+    "monthly": alarms_monthly,
     "carryover": carryover,
     "sep22_correlation": {
         "date": None,
@@ -1096,12 +1243,18 @@ alarms_insights = {
         "top_on_nonconform": [], "top_on_conform": [],
     },
     "takeaways": [
+        {"tone": "red", "title": "Time lost is the priority signal",
+         "body": (f"Alarms are downtime: operational alarms were active for ~{round(alm_dur_total_sec / 3600):,}h across {alm_dur_intervals:,} raise→clear cycles. "
+                  + (f"'{theme_duration[0]['theme']}' costs the most time ({theme_duration[0]['hours']:,}h)"
+                     + (f", then '{theme_duration[1]['theme']}' ({theme_duration[1]['hours']:,}h)." if len(theme_duration) > 1 else ".")
+                     if theme_duration else "No raise/clear pairs were found in the log."))},
+        {"tone": "amber", "title": "Frequency is not priority",
+         "body": (f"The most frequent alarm is '{alm_names.most_common(1)[0][0]}' ({alm_names.most_common(1)[0][1]:,} events), "
+                  + (f"but the biggest time sink is '{top_alarms_by_duration[0]['name']}' at ~{round(top_alarms_by_duration[0]['total_min'] / 60):,}h active "
+                     f"(avg {top_alarms_by_duration[0]['avg_min']:.0f} min per clear). Rank remediation by time waited, not by count."
+                     if top_alarms_by_duration else "no paired durations available."))},
         {"tone": "green", "title": "Carryover testing on every changeover",
          "body": f"{carryover['changeovers']:,} formula changeovers recorded across {carryover['vessels']} vessels, {carryover['changeover_test_pct']}% with a carryover test (CCLOGS) — strong cross-contamination evidence."},
-        {"tone": "amber", "title": "Level & feed alarms dominate",
-         "body": f"Top themes are '{alm_themes.most_common(1)[0][0]}' ({alm_themes.most_common(1)[0][1]:,}) and '{alm_themes.most_common(2)[1][0]}' ({alm_themes.most_common(2)[1][1]:,}) — bin levels and weigher/feed readiness drive most operational alarms."},
-        {"tone": "amber", "title": "Operational alarms are not batch-tagged",
-         "body": f"Of {alm_total:,} raw alarm rows, {windows_noise:,} are HW1/HW2 heartbeats (filtered). The remaining {alm_op_total:,} operational alarms carry no LOG_BATCH, so per-batch correlation needs timestamp matching."},
     ],
 }
 
@@ -1325,8 +1478,46 @@ for sec, ks in sec_groups.items():
                             "red": sum(1 for k in ks if k["rag"] == "RED"),
                             "total": len(ks), "gap_gbp": sum(k["gap_gbp"] or 0 for k in ks)})
 section_summary.sort(key=lambda x: x["avg"] if x["avg"] is not None else 99)
+
+# ---- Month-on-month gap scorecard: re-score threshold KPIs per month ----
+# Only the controls whose metric we already bucket monthly, scored with the same
+# thresholds used in KPI_MATRIX so the RAG is directly comparable.
+GAP_MONTHLY_KPIS = ["Customer attribution", "Batching accuracy", "Weighment accuracy",
+                    "Carryover discipline", "Throughput stability"]
+month_day_tonnes = defaultdict(list)
+for _d, _t in daily.items():
+    month_day_tonnes[_d.strftime("%Y-%m")].append(_t)
+_comm_by_month = {m["month"]: m for m in commercial_monthly}
+_alm_by_month = {m["month"]: m for m in alarms_monthly}
+gap_monthly = []
+for m in sorted(_comm_by_month):
+    cm = _comm_by_month[m]
+    am = _alm_by_month.get(m, {})
+    bp = cm["batch_perfect_pct"] or 0
+    it = cm["in_tol_pct"] or 0
+    ct = am.get("changeover_test_pct")
+    dts = month_day_tonnes.get(m, [])
+    cvm = (stdev(dts) / mean(dts) * 100) if len(dts) > 1 and mean(dts) else 0
+    scores = {
+        "Customer attribution": 4 if cm["unassigned_pct"] <= 15 else 2,
+        "Batching accuracy": 4 if bp >= 80 else 2 if bp >= 20 else 1,
+        "Weighment accuracy": 5 if it >= 90 else 3 if it >= 60 else 1,
+        "Carryover discipline": 5 if (ct is not None and ct >= 95) else 3 if (ct is not None and ct >= 50) else 1,
+        "Throughput stability": 4 if cvm <= 30 else 2,
+    }
+    avg = round(mean(scores.values()), 2)
+    gap_monthly.append({
+        "month": m, "scores": scores, "avg": avg,
+        "rag": "GREEN" if avg >= 4 else "AMBER" if avg >= 3 else "RED",
+        "metrics": {
+            "unassigned_pct": cm["unassigned_pct"], "batch_perfect_pct": round(bp, 1),
+            "in_tol_pct": round(it, 1), "changeover_test_pct": ct, "tonne_cv": round(cvm, 0),
+        },
+    })
+
 gap_out = {
     "kpis": gap_kpis, "sections": section_summary,
+    "monthly": gap_monthly, "monthly_kpis": GAP_MONTHLY_KPIS,
     "summary": {"total": len(gap_kpis),
                 "green": sum(1 for k in gap_kpis if k["rag"] == "GREEN"),
                 "amber": sum(1 for k in gap_kpis if k["rag"] == "AMBER"),
@@ -1394,6 +1585,7 @@ kg = {
 
 commercial = {
     "production": production,
+    "monthly": commercial_monthly,
     "timeline": timeline,
     "accuracy": accuracy,
     "throughput": {

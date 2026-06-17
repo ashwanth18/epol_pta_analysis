@@ -20,12 +20,16 @@ const required = [
 
 const missing = required.filter((rel) => !existsSync(join(root, rel)));
 
-if (missing.length === 0) {
-  process.exit(0);
+if (missing.length > 0) {
+  console.log("Missing dashboard data:");
+  for (const file of missing) console.log(`  - ${file}`);
+  console.log("Running export pipeline…\n");
+  execSync("python3 scripts/export.py", { cwd: root, stdio: "inherit" });
 }
 
-console.log("Missing dashboard data:");
-for (const file of missing) console.log(`  - ${file}`);
-console.log("Running export pipeline…\n");
-
-execSync("python3 scripts/export.py", { cwd: root, stdio: "inherit" });
+// Energy estimate is derived from throughput.json + Penmill's energy.json; it is
+// cheap, so (re)build it whenever it is missing.
+if (!existsSync(join(root, "data/energy-estimate.json"))) {
+  console.log("Building energy estimate…\n");
+  execSync("python3 scripts/energy_estimate.py", { cwd: root, stdio: "inherit" });
+}

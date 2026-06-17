@@ -3,8 +3,8 @@
 import { DataTable } from "@/components/DataTable";
 import { Callout, Card, CardBody, CardHeader, Pill, Stat } from "@/components/ui";
 import { chartTooltipProps } from "@/components/ChartTooltip";
-import type { AlarmsEnriched, AlarmsInsights, NamedCount } from "@/lib/data";
-import { fmtPct } from "@/lib/format";
+import type { AlarmsDurationItem, AlarmsEnriched, AlarmsInsights, AlarmsMonthly, NamedCount } from "@/lib/data";
+import { fmtPct, fmtPctOrDash, monthLabel } from "@/lib/format";
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 const THEME_COLORS: Record<string, string> = {
@@ -32,10 +32,20 @@ function CompareCard({ label, stats }: { label: string; stats: AlarmsInsights["s
   );
 }
 
+function fmtDuration(min: number): string {
+  if (min < 60) return `${min.toFixed(min < 10 ? 1 : 0)} min`;
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
 export function AlarmsClient({ data }: { data: AlarmsInsights }) {
   const sep = data.sep22_correlation;
   const hourly = data.hourly.map((h) => ({ ...h, label: `${String(h.hour).padStart(2, "0")}:00` }));
   const themes = data.themes.map((t) => ({ ...t, fill: THEME_COLORS[t.theme] ?? "#64748b" }));
+  const dur = data.duration;
+  const themeDur = dur.by_theme.map((t) => ({ ...t, fill: THEME_COLORS[t.theme] ?? "#64748b" }));
+  const mom = data.monthly.map((m) => ({ ...m, label: monthLabel(m.month) }));
 
   return (
     <div className="space-y-4">
@@ -47,10 +57,100 @@ export function AlarmsClient({ data }: { data: AlarmsInsights }) {
         ))}
       </div>
 
+      <Callout title="Priority = time lost, not frequency" tone="info">
+        Alarms are downtime. A rare alarm that keeps the line waiting costs more than a frequent one that clears instantly, so this page
+        ranks by <strong>active time</strong> (raised → cleared) first. {dur.note}
+      </Callout>
+
+      <Card>
+        <CardHeader right={<Pill tone="red">{data.monthly.length} months</Pill>}>Month on month</CardHeader>
+        <CardBody>
+          <p className="text-sm text-ink-500 mb-3">
+            Time lost to active alarms by calendar month (active time bucketed on clear time), with events, dominant theme and changeover test coverage. The latest month may be partial.
+          </p>
+          <div style={{ height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={mom} margin={{ left: 4, right: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(120,120,130,0.2)" />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} unit="h" />
+                <Tooltip {...chartTooltipProps} formatter={(v: number) => [`${v} h`, "Time lost"]} />
+                <Bar dataKey="time_lost_h" fill="#dc2626" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-4">
+            <DataTable
+              rows={data.monthly}
+              rowKey={(r) => r.month}
+              defaultSort={{ id: "month", dir: "asc" }}
+              pageSize={12}
+              columns={[
+                { id: "month", header: "Month", sortValue: (r: AlarmsMonthly) => r.month, cell: (r) => <span className="font-medium">{monthLabel(r.month)}</span> },
+                { id: "time_lost", header: "Time lost", align: "right", sortValue: (r) => r.time_lost_h, cell: (r) => <span className="font-semibold tabular-nums">{fmtDuration(r.time_lost_h * 60)}</span> },
+                { id: "events", header: "Events", align: "right", sortValue: (r) => r.events, cell: (r) => r.events.toLocaleString() },
+                { id: "theme", header: "Top theme (by time)", sortValue: (r) => r.top_theme ?? "", cell: (r) => <span className="text-xs">{r.top_theme ?? "—"}</span> },
+                { id: "changeovers", header: "Changeovers", align: "right", sortValue: (r) => r.changeovers, cell: (r) => r.changeovers.toLocaleString() },
+                { id: "test_pct", header: "Test coverage", align: "right", sortValue: (r) => r.changeover_test_pct ?? -1, cell: (r) => fmtPctOrDash(r.changeover_test_pct) },
+              ]}
+            />
+          </div>
+        </CardBody>
+      </Card>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
-          <CardHeader>Alarm themes</CardHeader>
+          <CardHeader right={<Pill tone="red">{fmtDuration(dur.total_min)} total</Pill>}>Where time is lost · by theme</CardHeader>
           <CardBody>
+            <p className="text-sm text-ink-500 mb-3">
+              Time each alarm was active (raised → cleared), summed across {dur.intervals.toLocaleString()} cycles over the period. This is the priority signal.
+            </p>
+            <div style={{ height: 280 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={themeDur} layout="vertical" margin={{ left: 120 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(120,120,130,0.2)" />
+                  <XAxis type="number" tick={{ fontSize: 11 }} unit="h" />
+                  <YAxis dataKey="theme" type="category" tick={{ fontSize: 10 }} width={120} />
+                  <Tooltip {...chartTooltipProps} formatter={(v: number) => [`${v} h`, "Active time"]} />
+                  <Bar dataKey="hours" radius={[0, 3, 3, 0]}>
+                    {themeDur.map((t, i) => (
+                      <Cell key={i} fill={t.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader right={<Pill tone="red">Priority order</Pill>}>Priority alarms · ranked by time lost</CardHeader>
+          <CardBody className="p-0">
+            <DataTable
+              rows={dur.top_alarms}
+              rowKey={(r) => r.name}
+              searchPlaceholder="Search alarm…"
+              searchText={(r) => r.name}
+              defaultSort={{ id: "total", dir: "desc" }}
+              pageSize={10}
+              columns={[
+                { id: "name", header: "Alarm", sortValue: (r: AlarmsDurationItem) => r.name, cell: (r) => <span className="text-xs">{r.name}</span> },
+                { id: "intervals", header: "Cycles", align: "right", sortValue: (r) => r.intervals, cell: (r) => r.intervals.toLocaleString() },
+                { id: "avg", header: "Avg wait", align: "right", sortValue: (r) => r.avg_min, cell: (r) => fmtDuration(r.avg_min) },
+                { id: "total", header: "Total lost", align: "right", sortValue: (r) => r.total_min, cell: (r) => <span className="font-semibold tabular-nums">{fmtDuration(r.total_min)}</span> },
+              ]}
+            />
+          </CardBody>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader right={<Pill tone="info">secondary</Pill>}>Alarm frequency by theme</CardHeader>
+          <CardBody>
+            <p className="text-sm text-ink-500 mb-3">
+              How often each theme fires. High counts flag nuisance alarms, but don&apos;t set priority on their own — cross-reference with time lost above.
+            </p>
             <div style={{ height: 280 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={themes} layout="vertical" margin={{ left: 120 }}>
@@ -88,7 +188,7 @@ export function AlarmsClient({ data }: { data: AlarmsInsights }) {
       </div>
 
       <Card>
-        <CardHeader right={<Pill tone="red">{data.top_alarms.length} types shown</Pill>}>Top operational alarms</CardHeader>
+        <CardHeader right={<Pill tone="info">{data.top_alarms.length} by frequency</Pill>}>Most frequent alarms</CardHeader>
         <CardBody className="p-0">
           <DataTable
             rows={data.top_alarms}

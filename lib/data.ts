@@ -8,6 +8,7 @@ import certData from "@/data/certificates.json";
 import throughputData from "@/data/throughput.json";
 import weighmentsData from "@/data/weighments.json";
 import processFlowData from "@/data/process-flow.json";
+import energyEstimateData from "@/data/energy-estimate.json";
 
 export const commercial = commercialData as Commercial;
 export const alarmsInsights = alarmsData as AlarmsInsights;
@@ -19,6 +20,7 @@ export const certificates = certData as Certificates;
 export const throughput = throughputData as ThroughputAnalytics;
 export const weighments = weighmentsData as WeighmentAnalytics;
 export const processFlow = processFlowData as ProcessFlow;
+export const energyEstimate = energyEstimateData as EnergyEstimate;
 
 // ---------- Types ----------
 export interface InventoryField {
@@ -74,6 +76,17 @@ export interface CommercialThroughput {
   total_hours: number;
   batches_timed: number;
   pct_timed: number;
+}
+export interface CommercialMonthly {
+  month: string;
+  batches: number;
+  tonnes: number;
+  days: number;
+  mean_t_day: number;
+  in_tol_pct: number | null;
+  batch_perfect_pct: number | null;
+  skus: number;
+  unassigned_pct: number;
 }
 export interface Weigher {
   name: string;
@@ -196,6 +209,7 @@ export interface IngredientCatalog {
 }
 export interface Commercial {
   production: Production;
+  monthly: CommercialMonthly[];
   timeline: TimelineEntry[];
   accuracy: Accuracy;
   throughput: CommercialThroughput;
@@ -236,9 +250,24 @@ export interface GapSummary {
   matrix_total: number;
   scored_from_data: number;
 }
+export interface GapMonthly {
+  month: string;
+  scores: Record<string, number>;
+  avg: number;
+  rag: "RED" | "AMBER" | "GREEN";
+  metrics: {
+    unassigned_pct: number;
+    batch_perfect_pct: number;
+    in_tol_pct: number;
+    changeover_test_pct: number | null;
+    tonne_cv: number;
+  };
+}
 export interface Gap {
   kpis: GapKpi[];
   sections: GapSection[];
+  monthly: GapMonthly[];
+  monthly_kpis: string[];
   summary: GapSummary;
 }
 
@@ -337,6 +366,37 @@ export interface AlarmsHourly {
   hour: number;
   count: number;
 }
+export interface AlarmsDurationItem {
+  name: string;
+  events: number;
+  intervals: number;
+  total_min: number;
+  avg_min: number;
+}
+export interface AlarmsThemeDuration {
+  theme: string;
+  total_min: number;
+  hours: number;
+}
+export interface AlarmsDuration {
+  total_min: number;
+  total_hours: number;
+  intervals: number;
+  intervals_capped: number;
+  cap_min: number;
+  unclosed: number;
+  by_theme: AlarmsThemeDuration[];
+  top_alarms: AlarmsDurationItem[];
+  note: string;
+}
+export interface AlarmsMonthly {
+  month: string;
+  events: number;
+  time_lost_h: number;
+  top_theme: string | null;
+  changeovers: number;
+  changeover_test_pct: number | null;
+}
 export interface AlarmsTakeaway {
   tone: "red" | "amber" | "green";
   title: string;
@@ -365,6 +425,8 @@ export interface AlarmsInsights {
   hourly: AlarmsHourly[];
   top_alarms: NamedCount[];
   tolerance_alarms: NamedCount[];
+  duration: AlarmsDuration;
+  monthly: AlarmsMonthly[];
   sep22_correlation: {
     date: string | null;
     conform: AlarmsBatchStats;
@@ -410,6 +472,14 @@ export interface ThroughputHourly {
   hour: number;
   batches: number;
   t_per_h_mean: number;
+  duration_min_mean: number;
+}
+export interface ThroughputMonthly {
+  month: string;
+  batches: number;
+  tonnes: number;
+  hours: number;
+  t_per_h: number;
   duration_min_mean: number;
 }
 export interface ThroughputRoute {
@@ -460,6 +530,7 @@ export interface ThroughputAnalytics {
   window_to: string | null;
   summary: ThroughputSummary;
   daily: ThroughputDaily[];
+  monthly: ThroughputMonthly[];
   hourly: ThroughputHourly[];
   routes: ThroughputRoute[];
   skus: ThroughputSku[];
@@ -572,4 +643,95 @@ export interface ProcessFlow {
   links: ProcessFlowLink[];
   raw_flows?: ProcessFlowRawFlows;
   notes: string[];
+}
+
+export interface EnergyDistributionBin {
+  bin_start: number;
+  bin_end: number;
+  count: number;
+  label: string;
+}
+export interface EnergyModel {
+  source: string;
+  trained_on_batches: number | null;
+  kwh_per_t_mean: number;
+  kwh_per_t_median: number;
+  kwh_per_t_p10: number;
+  kwh_per_t_p90: number;
+  kwh_per_t_stdev: number;
+  ingredient_buckets: { ingredient_count: number; kwh_per_t: number; batches: number }[];
+  distribution?: EnergyDistributionBin[];
+}
+export interface EnergyScenario {
+  batches: number;
+  tonnes: number;
+  est_kwh: number;
+  est_kwh_low: number;
+  est_kwh_high: number;
+  kwh_per_t: number;
+  est_cost_gbp: number;
+  est_cost_low_gbp: number;
+  est_cost_high_gbp: number;
+  est_kwh_grossed?: number;
+  est_cost_grossed_gbp?: number;
+}
+export interface EnergyCoverage {
+  timed_batches: number;
+  timed_tonnes: number;
+  total_tonnes: number;
+  tonnes_coverage_pct: number;
+  gross_up_factor: number;
+  pen_training_ingredient_range: [number | null, number | null];
+}
+export interface EnergyMonthly {
+  month: string;
+  tonnes: number;
+  est_kwh: number;
+  est_kwh_low: number;
+  est_kwh_high: number;
+  est_cost_gbp: number;
+}
+export interface EnergyRoute {
+  route: string;
+  press: boolean;
+  batches: number;
+  tonnes: number;
+  est_kwh: number;
+  kwh_per_t: number;
+}
+export interface EnergySku {
+  code: string;
+  name: string;
+  batches: number;
+  tonnes: number;
+  est_kwh: number;
+  kwh_per_t: number;
+}
+export interface EnergyDaily {
+  date: string;
+  tonnes: number;
+  est_kwh: number;
+}
+export interface EnergyIngredientSensitivity {
+  ingredient_count: number;
+  batches: number;
+  tonnes: number;
+  model_kwh_per_t: number;
+  in_training_range: boolean;
+}
+export interface EnergyEstimate {
+  window_from: string | null;
+  window_to: string | null;
+  tariff_gbp_per_kwh: number;
+  model: EnergyModel;
+  coverage: EnergyCoverage;
+  scenarios: { all: EnergyScenario; press_only: EnergyScenario };
+  monthly: EnergyMonthly[];
+  by_route: EnergyRoute[];
+  by_sku: EnergySku[];
+  daily: EnergyDaily[];
+  ingredient_sensitivity: EnergyIngredientSensitivity[];
+  distribution: EnergyDistributionBin[];
+  notes: string[];
+  generated_at: string;
 }

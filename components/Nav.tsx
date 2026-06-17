@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, BellRing, BookOpen, Boxes, Database, GaugeCircle, GitFork, Home, ShieldCheck, Waypoints, Wrench } from "lucide-react";
+import { Activity, BellRing, BookOpen, Boxes, Database, GaugeCircle, GitFork, Home, ShieldCheck, Waypoints, Wrench, Zap } from "lucide-react";
 
 const items = [
   { href: "/", label: "Overview", icon: Home },
@@ -12,6 +12,7 @@ const items = [
   { href: "/gap-analysis", label: "Gap Analysis", icon: ShieldCheck },
   { href: "/commercial", label: "Commercial", icon: Activity },
   { href: "/throughput", label: "Throughput & Cycle Time", icon: GaugeCircle },
+  { href: "/energy", label: "Estimated Energy", icon: Zap },
   { href: "/alarms", label: "Alarms & Conformance", icon: BellRing },
   { href: "/pdm", label: "Predictive Maintenance", icon: Wrench },
   { href: "/certificates", label: "Batch Certificates", icon: BookOpen },

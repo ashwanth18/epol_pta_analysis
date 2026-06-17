@@ -10,7 +10,8 @@
     "start": "next start",
     "clean": "rm -rf .next",
     "lint": "next lint",
-    "export-data": "python3 scripts/export.py",
+    "export-data": "python3 scripts/export.py && python3 scripts/energy_estimate.py",
+    "export-energy": "python3 scripts/energy_estimate.py",
     "setup-python": "python3 -m pip install -r requirements.txt"
   },
   "dependencies": {
