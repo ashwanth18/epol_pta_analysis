@@ -13,7 +13,7 @@ export default function AlarmsPage() {
     <div>
       <PageHeader
         title="Alarms & Conformance"
-        subtitle="Alarms are downtime. This view prioritises where time is lost — active alarm time (raised → cleared) — over raw frequency, alongside shift profile and conformance correlation. From ALMLOGS, MANLOG, and BWEIGHS."
+        subtitle="Alarms hold up production. This view prioritises where time is lost — wall-clock alarm-active time (raised → cleared, overlaps merged) — over raw frequency, alongside shift profile and conformance correlation. From ALMLOGS, MANLOG, and BWEIGHS."
       />
 
       <Callout title="Data coverage" tone="amber">
@@ -23,7 +23,7 @@ export default function AlarmsPage() {
       </Callout>
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
-        <Stat value={`${Math.round(d.total_hours).toLocaleString()} h`} label="Time lost to alarms" tone="red" hint={`${fmtNumber(d.intervals)} raise→clear cycles`} />
+        <Stat value={`${Math.round(d.total_hours).toLocaleString()} h`} label="Alarm-active time (wall-clock)" tone="red" hint={d.active_pct != null ? `${d.active_pct}% of ${Math.round(d.window_hours).toLocaleString()}h logged` : `${fmtNumber(d.intervals)} cycles`} />
         <Stat value={fmtNumber(t.alarm_events_operational)} label="Operational alarms" tone="amber" hint={`${fmtNumber(t.windows_noise_events)} Windows noise excluded`} />
         <Stat value={t.unique_alarm_types.toString()} label="Alarm types" />
         <Stat value={fmtPct(bc.batches_conform_pct)} label="Conform batches" tone="amber" hint={`${bc.batches_conform} / ${bc.batches_conform + bc.batches_nonconform}`} />

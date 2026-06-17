@@ -1005,6 +1005,11 @@ alm_dur_capped = 0
 alm_m_events = Counter()                              # operational events by month
 alm_m_dur_sec = defaultdict(float)                   # active seconds by month (clear time)
 alm_m_theme_dur = defaultdict(lambda: defaultdict(float))  # month -> theme -> active seconds
+# Active intervals (raise_dt, clear_dt) kept so overlapping alarms can be merged
+# into true wall-clock "alarm-active" time instead of an inflated sum.
+alm_intervals = []                       # all (start, end) globally
+alm_theme_intervals = defaultdict(list)  # theme -> [(start, end)]
+alm_m_intervals = defaultdict(list)      # month (of raise) -> [(start, end)]
 for path in _day_files("ALMLOGS.DBF"):
     try:
         rows = DBF(path, encoding="latin-1", ignore_missing_memofile=True)
@@ -1041,20 +1046,49 @@ for path in _day_files("ALMLOGS.DBF"):
                         secs = ALM_MAX_INTERVAL_SEC
                         alm_dur_capped += 1
                     onm = ot[1]
+                    oth = alarm_theme(onm)
+                    start_dt = ot[0]
+                    end_dt = start_dt + timedelta(seconds=secs)
                     alm_dur_sec[onm] += secs
                     alm_dur_cnt[onm] += 1
-                    alm_theme_dur[alarm_theme(onm)] += secs
+                    alm_theme_dur[oth] += secs
                     alm_dur_intervals += 1
                     cm = t.strftime("%Y-%m")
                     alm_m_dur_sec[cm] += secs
-                    alm_m_theme_dur[cm][alarm_theme(onm)] += secs
+                    alm_m_theme_dur[cm][oth] += secs
+                    # keep intervals for wall-clock (overlap-merged) totals
+                    alm_intervals.append((start_dt, end_dt))
+                    alm_theme_intervals[oth].append((start_dt, end_dt))
+                    alm_m_intervals[start_dt.strftime("%Y-%m")].append((start_dt, end_dt))
         lb = r.get("LOG_BATCH")
         if lb:
             alm_by_batch[lb] += 1
 alm_seen = None  # free memory
 
 # ---- Alarm active-time rollups ----
-alm_dur_total_sec = sum(alm_dur_sec.values())
+def union_seconds(intervals):
+    """Merge overlapping (start, end) intervals → total wall-clock seconds.
+    Concurrent alarms overlap, so summing per-alarm durations overstates real
+    time; the union is the true time during which at least one alarm was active."""
+    if not intervals:
+        return 0.0
+    ivs = sorted(intervals)
+    total = 0.0
+    cur_s, cur_e = ivs[0]
+    for s, e in ivs[1:]:
+        if s <= cur_e:
+            if e > cur_e:
+                cur_e = e
+        else:
+            total += (cur_e - cur_s).total_seconds()
+            cur_s, cur_e = s, e
+    total += (cur_e - cur_s).total_seconds()
+    return total
+
+alm_dur_summed_sec = sum(alm_dur_sec.values())       # cumulative (overlaps double-count)
+alm_dur_wall_sec = union_seconds(alm_intervals)      # true wall-clock active time
+# Per-alarm intervals never overlap (one open span per alarm ID), so their summed
+# time is already wall-clock-correct — keep it for the ranking table.
 top_alarms_by_duration = sorted(
     ({"name": n,
       "events": alm_names.get(n, 0),
@@ -1063,9 +1097,12 @@ top_alarms_by_duration = sorted(
       "avg_min": round(s / 60 / alm_dur_cnt[n], 2) if alm_dur_cnt[n] else 0}
      for n, s in alm_dur_sec.items()),
     key=lambda x: -x["total_min"])[:20]
+# Theme totals aggregate many alarms that can overlap → use the merged union.
 theme_duration = sorted(
-    ({"theme": th, "total_min": round(s / 60, 1), "hours": round(s / 3600, 1)}
-     for th, s in alm_theme_dur.items()),
+    ({"theme": th,
+      "total_min": round(union_seconds(ivs) / 60, 1),
+      "hours": round(union_seconds(ivs) / 3600, 1)}
+     for th, ivs in alm_theme_intervals.items()),
     key=lambda x: -x["total_min"])
 windows_noise = alm_total - alm_op_total
 
@@ -1180,7 +1217,7 @@ for m in sorted(set(alm_m_events) | set(alm_m_dur_sec) | set(cc_m_changeovers)):
     alarms_monthly.append({
         "month": m,
         "events": alm_m_events.get(m, 0),
-        "time_lost_h": round(alm_m_dur_sec.get(m, 0) / 3600, 1),
+        "time_lost_h": round(union_seconds(alm_m_intervals.get(m, [])) / 3600, 1),
         "top_theme": top_theme,
         "changeovers": co,
         "changeover_test_pct": round(100 * cc_m_tested.get(m, 0) / co, 1) if co else None,
@@ -1217,15 +1254,18 @@ alarms_insights = {
     "top_alarms": [{"name": n, "count": c} for n, c in alm_names.most_common(20)],
     "tolerance_alarms": [{"name": n, "count": c} for n, c in alm_tol.most_common()],
     "duration": {
-        "total_min": round(alm_dur_total_sec / 60, 1),
-        "total_hours": round(alm_dur_total_sec / 3600, 1),
+        "total_min": round(alm_dur_wall_sec / 60, 1),
+        "total_hours": round(alm_dur_wall_sec / 3600, 1),
+        "summed_hours": round(alm_dur_summed_sec / 3600, 1),
+        "window_hours": alarm_log_hours,
+        "active_pct": round(100 * alm_dur_wall_sec / 3600 / alarm_log_hours, 1) if alarm_log_hours else None,
         "intervals": alm_dur_intervals,
         "intervals_capped": alm_dur_capped,
         "cap_min": ALM_MAX_INTERVAL_SEC // 60,
         "unclosed": len(alm_open),
         "by_theme": theme_duration,
         "top_alarms": top_alarms_by_duration,
-        "note": "Active time = sum of intervals from an alarm raising (STATE on) to clearing (STATE off), paired per alarm ID. Intervals over the cap are clamped; alarms still active at period end are excluded.",
+        "note": "Wall-clock active time = the union of all raise→clear intervals (overlapping/concurrent alarms merged, not summed), so it never exceeds elapsed time. Theme totals are likewise overlap-merged. Per-alarm rows below never overlap, so their times are exact. Intervals over the cap are clamped; alarms still active at period end are excluded.",
     },
     "monthly": alarms_monthly,
     "carryover": carryover,
@@ -1244,8 +1284,9 @@ alarms_insights = {
     },
     "takeaways": [
         {"tone": "red", "title": "Time lost is the priority signal",
-         "body": (f"Alarms are downtime: operational alarms were active for ~{round(alm_dur_total_sec / 3600):,}h across {alm_dur_intervals:,} raise→clear cycles. "
-                  + (f"'{theme_duration[0]['theme']}' costs the most time ({theme_duration[0]['hours']:,}h)"
+         "body": (f"At least one alarm was active for ~{round(alm_dur_wall_sec / 3600):,}h of the {alarm_log_hours:,.0f}h logged "
+                  f"({round(100 * alm_dur_wall_sec / 3600 / alarm_log_hours) if alarm_log_hours else 0}% of the period), across {alm_dur_intervals:,} raise→clear cycles. "
+                  + (f"'{theme_duration[0]['theme']}' holds time the most ({theme_duration[0]['hours']:,}h)"
                      + (f", then '{theme_duration[1]['theme']}' ({theme_duration[1]['hours']:,}h)." if len(theme_duration) > 1 else ".")
                      if theme_duration else "No raise/clear pairs were found in the log."))},
         {"tone": "amber", "title": "Frequency is not priority",

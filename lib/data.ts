@@ -381,6 +381,9 @@ export interface AlarmsThemeDuration {
 export interface AlarmsDuration {
   total_min: number;
   total_hours: number;
+  summed_hours: number;
+  window_hours: number;
+  active_pct: number | null;
   intervals: number;
   intervals_capped: number;
   cap_min: number;

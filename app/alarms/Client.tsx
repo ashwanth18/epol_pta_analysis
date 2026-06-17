@@ -58,15 +58,17 @@ export function AlarmsClient({ data }: { data: AlarmsInsights }) {
       </div>
 
       <Callout title="Priority = time lost, not frequency" tone="info">
-        Alarms are downtime. A rare alarm that keeps the line waiting costs more than a frequent one that clears instantly, so this page
-        ranks by <strong>active time</strong> (raised → cleared) first. {dur.note}
+        A rare alarm that holds the line for hours costs more than a frequent one that clears instantly, so this page
+        ranks by <strong>active time</strong> (raised → cleared) first. The headline is{" "}
+        <strong>wall-clock</strong> time — concurrent alarms are merged, not added, so it never exceeds the{" "}
+        {Math.round(dur.window_hours).toLocaleString()}h logged ({dur.active_pct}% active). {dur.note}
       </Callout>
 
       <Card>
         <CardHeader right={<Pill tone="red">{data.monthly.length} months</Pill>}>Month on month</CardHeader>
         <CardBody>
           <p className="text-sm text-ink-500 mb-3">
-            Time lost to active alarms by calendar month (active time bucketed on clear time), with events, dominant theme and changeover test coverage. The latest month may be partial.
+            Wall-clock alarm-active time per month (overlapping alarms merged), with events, dominant theme and changeover test coverage. The latest month may be partial.
           </p>
           <div style={{ height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -103,7 +105,7 @@ export function AlarmsClient({ data }: { data: AlarmsInsights }) {
           <CardHeader right={<Pill tone="red">{fmtDuration(dur.total_min)} total</Pill>}>Where time is lost · by theme</CardHeader>
           <CardBody>
             <p className="text-sm text-ink-500 mb-3">
-              Time each alarm was active (raised → cleared), summed across {dur.intervals.toLocaleString()} cycles over the period. This is the priority signal.
+              Wall-clock time each theme had an alarm active (raised → cleared, overlaps merged) across {dur.intervals.toLocaleString()} cycles. This is the priority signal.
             </p>
             <div style={{ height: 280 }}>
               <ResponsiveContainer width="100%" height="100%">
