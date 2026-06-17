@@ -372,6 +372,16 @@ export interface AlarmsDurationItem {
   intervals: number;
   total_min: number;
   avg_min: number;
+  cls: "stopping" | "advisory";
+}
+export interface AlarmsCrosscheck {
+  production_active_hours: number;
+  plant_idle_hours: number;
+  stopping_during_idle_h: number;
+  stopping_during_production_h: number;
+  stopping_in_idle_pct: number | null;
+  continuous: boolean;
+  note: string;
 }
 export interface AlarmsThemeDuration {
   theme: string;
@@ -384,12 +394,16 @@ export interface AlarmsDuration {
   summed_hours: number;
   window_hours: number;
   active_pct: number | null;
+  stopping_hours: number;
+  advisory_hours: number;
+  stopping_pct: number | null;
   intervals: number;
   intervals_capped: number;
   cap_min: number;
   unclosed: number;
   by_theme: AlarmsThemeDuration[];
   top_alarms: AlarmsDurationItem[];
+  crosscheck: AlarmsCrosscheck;
   note: string;
 }
 export interface AlarmsMonthly {

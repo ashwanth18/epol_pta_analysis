@@ -23,9 +23,9 @@ export default function AlarmsPage() {
       </Callout>
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
-        <Stat value={`${Math.round(d.total_hours).toLocaleString()} h`} label="Alarm-active time (wall-clock)" tone="red" hint={d.active_pct != null ? `${d.active_pct}% of ${Math.round(d.window_hours).toLocaleString()}h logged` : `${fmtNumber(d.intervals)} cycles`} />
-        <Stat value={fmtNumber(t.alarm_events_operational)} label="Operational alarms" tone="amber" hint={`${fmtNumber(t.windows_noise_events)} Windows noise excluded`} />
-        <Stat value={t.unique_alarm_types.toString()} label="Alarm types" />
+        <Stat value={`${Math.round(d.stopping_hours).toLocaleString()} h`} label="Est. downtime (faults)" tone="red" hint={`${d.stopping_pct}% of period · faults only`} />
+        <Stat value={`${Math.round(d.total_hours).toLocaleString()} h`} label="Alarm-active time (wall-clock)" tone="amber" hint={d.active_pct != null ? `${d.active_pct}% of ${Math.round(d.window_hours).toLocaleString()}h logged` : `${fmtNumber(d.intervals)} cycles`} />
+        <Stat value={fmtNumber(t.alarm_events_operational)} label="Operational alarms" hint={`${fmtNumber(t.windows_noise_events)} Windows noise excluded`} />
         <Stat value={fmtPct(bc.batches_conform_pct)} label="Conform batches" tone="amber" hint={`${bc.batches_conform} / ${bc.batches_conform + bc.batches_nonconform}`} />
         <Stat value={fmtPct(bc.weighments_conform_pct)} label="Conform weighments" tone="green" hint={`${fmtNumber(bc.weighments_conform)} / ${fmtNumber(bc.weighments_conform + bc.weighments_nonconform)}`} />
         <Stat value={fmtNumber(t.manual_events)} label="Manual interventions" tone="amber" hint={`${c.manual_log_from?.slice(0, 10)} → ${c.manual_log_to?.slice(0, 10)}`} />

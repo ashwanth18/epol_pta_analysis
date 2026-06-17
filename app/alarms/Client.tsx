@@ -65,6 +65,42 @@ export function AlarmsClient({ data }: { data: AlarmsInsights }) {
       </Callout>
 
       <Card>
+        <CardHeader right={<Pill tone="red">~{Math.round(dur.stopping_hours).toLocaleString()} h est. downtime</Pill>}>
+          Estimated downtime — fault alarms vs advisory flags
+        </CardHeader>
+        <CardBody>
+          <p className="text-sm text-ink-500 mb-3">
+            Not every active alarm stops production. We split alarms into <strong>faults/trips</strong> (likely halts)
+            and <strong>advisory flags</strong> (low level, no feed, not scheduled, out of tolerance). Classification is
+            keyword-based; the estimated-downtime figure counts faults only.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="rounded-md border border-red-200 dark:border-red-900/50 px-3 py-2 bg-red-50/50 dark:bg-red-950/20">
+              <div className="text-[11px] text-ink-500 uppercase tracking-wide">Fault / trip time</div>
+              <div className="text-xl font-semibold tabular-nums text-rag-red">{fmtDuration(dur.stopping_hours * 60)}</div>
+              <div className="text-[11px] text-ink-400">{dur.stopping_pct}% of period · est. downtime</div>
+            </div>
+            <div className="rounded-md border border-ink-200 dark:border-ink-700 px-3 py-2">
+              <div className="text-[11px] text-ink-500 uppercase tracking-wide">Advisory flag time</div>
+              <div className="text-xl font-semibold tabular-nums">{fmtDuration(dur.advisory_hours * 60)}</div>
+              <div className="text-[11px] text-ink-400">excluded from downtime</div>
+            </div>
+            <div className="rounded-md border border-ink-200 dark:border-ink-700 px-3 py-2">
+              <div className="text-[11px] text-ink-500 uppercase tracking-wide">Production active</div>
+              <div className="text-xl font-semibold tabular-nums">{Math.round((100 * dur.crosscheck.production_active_hours) / dur.window_hours)}%</div>
+              <div className="text-[11px] text-ink-400">{fmtDuration(dur.crosscheck.production_active_hours * 60)} of {Math.round(dur.window_hours).toLocaleString()}h</div>
+            </div>
+            <div className="rounded-md border border-ink-200 dark:border-ink-700 px-3 py-2">
+              <div className="text-[11px] text-ink-500 uppercase tracking-wide">Full-plant idle</div>
+              <div className="text-xl font-semibold tabular-nums">{fmtDuration(dur.crosscheck.plant_idle_hours * 60)}</div>
+              <div className="text-[11px] text-ink-400">runs effectively continuously</div>
+            </div>
+          </div>
+          <p className="text-xs text-ink-500 mt-3">{dur.crosscheck.note}</p>
+        </CardBody>
+      </Card>
+
+      <Card>
         <CardHeader right={<Pill tone="red">{data.monthly.length} months</Pill>}>Month on month</CardHeader>
         <CardBody>
           <p className="text-sm text-ink-500 mb-3">
@@ -137,6 +173,7 @@ export function AlarmsClient({ data }: { data: AlarmsInsights }) {
               pageSize={10}
               columns={[
                 { id: "name", header: "Alarm", sortValue: (r: AlarmsDurationItem) => r.name, cell: (r) => <span className="text-xs">{r.name}</span> },
+                { id: "cls", header: "Type", sortValue: (r) => r.cls, cell: (r) => (r.cls === "stopping" ? <Pill tone="red">Fault</Pill> : <Pill tone="neutral">Advisory</Pill>) },
                 { id: "intervals", header: "Cycles", align: "right", sortValue: (r) => r.intervals, cell: (r) => r.intervals.toLocaleString() },
                 { id: "avg", header: "Avg wait", align: "right", sortValue: (r) => r.avg_min, cell: (r) => fmtDuration(r.avg_min) },
                 { id: "total", header: "Total lost", align: "right", sortValue: (r) => r.total_min, cell: (r) => <span className="font-semibold tabular-nums">{fmtDuration(r.total_min)}</span> },

@@ -960,6 +960,18 @@ def alarm_name(raw):
     return n
 
 
+# Heuristic split: which alarm names indicate a genuine equipment STOP (fault /
+# trip / jam) vs an advisory state flag (low level, no feed, not scheduled, out
+# of tolerance) that does not by itself halt the line. Keyword-based — see note.
+ALM_STOP_KW = ("FAIL", "FAULT", "TRIP", "OVERLOAD", "JAM", "BLOCK", "CHOKE",
+               "E-STOP", "ESTOP", "EMERGENCY", "STOPPED", "NOT RUN", "NO RUN")
+
+
+def alarm_is_stopping(name):
+    u = name.upper()
+    return any(k in u for k in ALM_STOP_KW)
+
+
 def alarm_theme(name):
     u = name.upper()
     if any(k in u for k in ("LL ", "HL ", "LEVEL", "COVERED", "NOT OFF", "NOT ON", "HIGH LEVEL", "LOW LEVEL")):
@@ -1010,6 +1022,8 @@ alm_m_theme_dur = defaultdict(lambda: defaultdict(float))  # month -> theme -> a
 alm_intervals = []                       # all (start, end) globally
 alm_theme_intervals = defaultdict(list)  # theme -> [(start, end)]
 alm_m_intervals = defaultdict(list)      # month (of raise) -> [(start, end)]
+alm_stop_intervals = []                  # fault/stop alarms only
+alm_adv_intervals = []                   # advisory/state alarms only
 for path in _day_files("ALMLOGS.DBF"):
     try:
         rows = DBF(path, encoding="latin-1", ignore_missing_memofile=True)
@@ -1060,33 +1074,73 @@ for path in _day_files("ALMLOGS.DBF"):
                     alm_intervals.append((start_dt, end_dt))
                     alm_theme_intervals[oth].append((start_dt, end_dt))
                     alm_m_intervals[start_dt.strftime("%Y-%m")].append((start_dt, end_dt))
+                    if alarm_is_stopping(onm):
+                        alm_stop_intervals.append((start_dt, end_dt))
+                    else:
+                        alm_adv_intervals.append((start_dt, end_dt))
         lb = r.get("LOG_BATCH")
         if lb:
             alm_by_batch[lb] += 1
 alm_seen = None  # free memory
 
 # ---- Alarm active-time rollups ----
-def union_seconds(intervals):
-    """Merge overlapping (start, end) intervals → total wall-clock seconds.
-    Concurrent alarms overlap, so summing per-alarm durations overstates real
-    time; the union is the true time during which at least one alarm was active."""
+def merge_intervals(intervals):
+    """Merge overlapping (start, end) intervals into a non-overlapping list."""
     if not intervals:
-        return 0.0
+        return []
     ivs = sorted(intervals)
-    total = 0.0
-    cur_s, cur_e = ivs[0]
+    out = [list(ivs[0])]
     for s, e in ivs[1:]:
-        if s <= cur_e:
-            if e > cur_e:
-                cur_e = e
+        if s <= out[-1][1]:
+            if e > out[-1][1]:
+                out[-1][1] = e
         else:
-            total += (cur_e - cur_s).total_seconds()
-            cur_s, cur_e = s, e
-    total += (cur_e - cur_s).total_seconds()
+            out.append([s, e])
+    return out
+
+def union_seconds(intervals):
+    """Total wall-clock seconds across merged intervals — concurrent alarms count
+    once, so the figure can never exceed elapsed time."""
+    return sum((e - s).total_seconds() for s, e in merge_intervals(intervals))
+
+def intersect_seconds(a, b):
+    """Wall-clock seconds where interval-sets a and b overlap."""
+    A, B = merge_intervals(a), merge_intervals(b)
+    i = j = 0
+    total = 0.0
+    while i < len(A) and j < len(B):
+        s = max(A[i][0], B[j][0])
+        e = min(A[i][1], B[j][1])
+        if s < e:
+            total += (e - s).total_seconds()
+        if A[i][1] < B[j][1]:
+            i += 1
+        else:
+            j += 1
     return total
 
 alm_dur_summed_sec = sum(alm_dur_sec.values())       # cumulative (overlaps double-count)
 alm_dur_wall_sec = union_seconds(alm_intervals)      # true wall-clock active time
+alm_stop_wall_sec = union_seconds(alm_stop_intervals)  # fault alarms only
+alm_adv_wall_sec = union_seconds(alm_adv_intervals)    # advisory alarms only
+
+# Cross-check vs real production: build batch run-time intervals (start→finish),
+# then see how much fault-alarm time lands in production GAPS (strong downtime
+# evidence) vs while batches were still running (localised / concurrent lines).
+prod_intervals = []
+for _s in bstarts:
+    _st = parse_dt(_s.get("START_TIME"))
+    _e2 = bend2_by.get(_s.get("LOG_BATCH"))
+    _en = parse_dt(_e2.get("FINISHTIME")) if _e2 else None
+    if _st and _en and _en > _st:
+        prod_intervals.append((_st, _en))
+prod_merged = merge_intervals(prod_intervals)
+prod_active_sec = sum((e - s).total_seconds() for s, e in prod_merged)
+idle_intervals = [(prod_merged[k][1], prod_merged[k + 1][0]) for k in range(len(prod_merged) - 1)]
+idle_sec = sum((e - s).total_seconds() for s, e in idle_intervals)
+stop_in_idle_sec = intersect_seconds(alm_stop_intervals, idle_intervals)
+stop_in_prod_sec = intersect_seconds(alm_stop_intervals, prod_merged)
+
 # Per-alarm intervals never overlap (one open span per alarm ID), so their summed
 # time is already wall-clock-correct — keep it for the ranking table.
 top_alarms_by_duration = sorted(
@@ -1094,7 +1148,8 @@ top_alarms_by_duration = sorted(
       "events": alm_names.get(n, 0),
       "intervals": alm_dur_cnt[n],
       "total_min": round(s / 60, 1),
-      "avg_min": round(s / 60 / alm_dur_cnt[n], 2) if alm_dur_cnt[n] else 0}
+      "avg_min": round(s / 60 / alm_dur_cnt[n], 2) if alm_dur_cnt[n] else 0,
+      "cls": "stopping" if alarm_is_stopping(n) else "advisory"}
      for n, s in alm_dur_sec.items()),
     key=lambda x: -x["total_min"])[:20]
 # Theme totals aggregate many alarms that can overlap → use the merged union.
@@ -1259,13 +1314,25 @@ alarms_insights = {
         "summed_hours": round(alm_dur_summed_sec / 3600, 1),
         "window_hours": alarm_log_hours,
         "active_pct": round(100 * alm_dur_wall_sec / 3600 / alarm_log_hours, 1) if alarm_log_hours else None,
+        "stopping_hours": round(alm_stop_wall_sec / 3600, 1),
+        "advisory_hours": round(alm_adv_wall_sec / 3600, 1),
+        "stopping_pct": round(100 * alm_stop_wall_sec / 3600 / alarm_log_hours, 1) if alarm_log_hours else None,
         "intervals": alm_dur_intervals,
         "intervals_capped": alm_dur_capped,
         "cap_min": ALM_MAX_INTERVAL_SEC // 60,
         "unclosed": len(alm_open),
         "by_theme": theme_duration,
         "top_alarms": top_alarms_by_duration,
-        "note": "Wall-clock active time = the union of all raise→clear intervals (overlapping/concurrent alarms merged, not summed), so it never exceeds elapsed time. Theme totals are likewise overlap-merged. Per-alarm rows below never overlap, so their times are exact. Intervals over the cap are clamped; alarms still active at period end are excluded.",
+        "crosscheck": {
+            "production_active_hours": round(prod_active_sec / 3600, 1),
+            "plant_idle_hours": round(idle_sec / 3600, 1),
+            "stopping_during_idle_h": round(stop_in_idle_sec / 3600, 1),
+            "stopping_during_production_h": round(stop_in_prod_sec / 3600, 1),
+            "stopping_in_idle_pct": round(100 * stop_in_idle_sec / alm_stop_wall_sec, 1) if alm_stop_wall_sec else None,
+            "continuous": idle_sec < 0.02 * (prod_active_sec + idle_sec) if (prod_active_sec + idle_sec) else False,
+            "note": "Cross-check vs production: batches overlap across all lines, so production was active almost the entire window and full-plant idle is ~0 — the mill runs effectively continuously. Plant-level idle therefore can't validate downtime; faults overlap running batches because another line is always active. Per-line batch/alarm mapping would be needed to confirm true line stoppages.",
+        },
+        "note": "Wall-clock active time = the union of all raise→clear intervals (overlapping/concurrent alarms merged, not summed), so it never exceeds elapsed time. Estimated downtime counts STOPPING alarms only (faults/trips/jams); advisory state flags (low level, no feed, not scheduled, out of tolerance) are excluded. Per-alarm rows are exact; classification is keyword-based. Intervals over the cap are clamped; alarms still active at period end are excluded.",
     },
     "monthly": alarms_monthly,
     "carryover": carryover,
@@ -1283,11 +1350,11 @@ alarms_insights = {
         "top_on_nonconform": [], "top_on_conform": [],
     },
     "takeaways": [
-        {"tone": "red", "title": "Time lost is the priority signal",
-         "body": (f"At least one alarm was active for ~{round(alm_dur_wall_sec / 3600):,}h of the {alarm_log_hours:,.0f}h logged "
-                  f"({round(100 * alm_dur_wall_sec / 3600 / alarm_log_hours) if alarm_log_hours else 0}% of the period), across {alm_dur_intervals:,} raise→clear cycles. "
-                  + (f"'{theme_duration[0]['theme']}' holds time the most ({theme_duration[0]['hours']:,}h)"
-                     + (f", then '{theme_duration[1]['theme']}' ({theme_duration[1]['hours']:,}h)." if len(theme_duration) > 1 else ".")
+        {"tone": "red", "title": "Estimated downtime: faults, not nuisance flags",
+         "body": (f"Fault/trip alarms (excluding advisory flags) were active for ~{round(alm_stop_wall_sec / 3600):,}h "
+                  f"of the {alarm_log_hours:,.0f}h logged — the estimated downtime signal — vs ~{round(alm_adv_wall_sec / 3600):,}h "
+                  f"of advisory flags that don't stop the line. "
+                  + (f"'{theme_duration[0]['theme']}' holds the most time ({theme_duration[0]['hours']:,}h)."
                      if theme_duration else "No raise/clear pairs were found in the log."))},
         {"tone": "amber", "title": "Frequency is not priority",
          "body": (f"The most frequent alarm is '{alm_names.most_common(1)[0][0]}' ({alm_names.most_common(1)[0][1]:,} events), "
